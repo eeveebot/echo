@@ -82,49 +82,63 @@ async function registerEchoCommand(): Promise<void> {
 await registerEchoCommand();
 
 // Subscribe to command execution messages
-const echoCommandSub = nats.subscribe(`command.execute.${echoCommandUUID}`, (subject, message) => {
-  try {
-    const data = JSON.parse(message.string());
-    log.info(
-      `Platform: ${data.platform}, Connection: ${data.instance}, Channel: ${data.channel}, User: ${data.user}, Message: ${data.originalText}`,
-      { producer: 'echo' }
-    );
+const echoCommandSub = nats.subscribe(
+  `command.execute.${echoCommandUUID}`,
+  (subject, message) => {
+    try {
+      const data = JSON.parse(message.string());
+      log.info('Received command.execute for echo', {
+        producer: 'echo',
+        platform: data.platform,
+        instance: data.instance,
+        channel: data.channel,
+        user: data.user,
+        originalText: data.originalText,
+      });
 
-    // Echo back on chat.message.outgoing.$PLATFORM.$INSTANCE.$CHANNEL
-    const response = {
-      channel: data.channel,
-      network: data.network,
-      instance: data.instance,
-      platform: data.platform,
-      text: data.text,
-      trace: data.trace,
-      type: 'message.outgoing',
-    };
+      // Echo back on chat.message.outgoing.$PLATFORM.$INSTANCE.$CHANNEL
+      const response = {
+        channel: data.channel,
+        network: data.network,
+        instance: data.instance,
+        platform: data.platform,
+        text: data.text,
+        trace: data.trace,
+        type: 'message.outgoing',
+      };
 
-    const outgoingTopic = `chat.message.outgoing.${data.platform}.${data.instance}.${data.channel}`;
-    void nats.publish(outgoingTopic, JSON.stringify(response));
-  } catch (error) {
-    log.error(`Failed to parse message: ${message.string()}`, {
-      producer: 'echo',
-      error: error,
-    });
+      const outgoingTopic = `chat.message.outgoing.${data.platform}.${data.instance}.${data.channel}`;
+      void nats.publish(outgoingTopic, JSON.stringify(response));
+    } catch (error) {
+      log.error('Failed to parse message', {
+        producer: 'echo',
+        message: message.string(),
+        error: error,
+      });
+    }
   }
-});
+);
 natsSubscriptions.push(echoCommandSub);
 
 // Subscribe to control messages for re-registering commands
-const controlSubRegisterCommandEcho = nats.subscribe('control.registercommands.echo', () => {
-  log.info('Received command registration control message', {
-    producer: 'echo',
-  });
-  void registerEchoCommand();
-});
+const controlSubRegisterCommandEcho = nats.subscribe(
+  'control.registercommands.echo',
+  () => {
+    log.info('Received control.registercommands.echo control message', {
+      producer: 'echo',
+    });
+    void registerEchoCommand();
+  }
+);
 natsSubscriptions.push(controlSubRegisterCommandEcho);
 
-const controlSubRegisterCommandAll = nats.subscribe('control.registercommands', () => {
-  log.info('Received command registration control message', {
-    producer: 'echo',
-  });
-  void registerEchoCommand();
-});
+const controlSubRegisterCommandAll = nats.subscribe(
+  'control.registercommands',
+  () => {
+    log.info('Received control.registercommands control message', {
+      producer: 'echo',
+    });
+    void registerEchoCommand();
+  }
+);
 natsSubscriptions.push(controlSubRegisterCommandAll);
