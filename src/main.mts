@@ -57,7 +57,7 @@ async function registerEchoCommand(): Promise<void> {
     instance: '.*', // Match all instances
     channel: '.*', // Match all channels
     user: '.*', // Match all users
-    regex: 'echo', // Match echo
+    regex: 'echo ', // Match echo - trailing whitespace intentional
     platformPrefixAllowed: true,
     ratelimit: {
       mode: 'drop',
