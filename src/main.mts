@@ -90,7 +90,7 @@ const echoCommandSub = nats.subscribe(`command.execute.${echoCommandUUID}`, (sub
       { producer: 'echo' }
     );
 
-    // Echo back on chat.message.outgoing.$PLATFORM.$INSTANCE
+    // Echo back on chat.message.outgoing.$PLATFORM.$INSTANCE.$CHANNEL
     const response = {
       channel: data.channel,
       network: data.network,
