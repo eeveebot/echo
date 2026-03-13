@@ -57,7 +57,7 @@ async function registerEchoCommand(): Promise<void> {
     instance: '.*', // Match all instances
     channel: '.*', // Match all channels
     user: '.*', // Match all users
-    regex: '^!echo\\s+(.+)', // Match !echo followed by text
+    regex: 'echo\\s+(.+)', // Match echo followed by text (platform prefix applied by router)
     platformPrefixAllowed: true,
     ratelimit: {
       mode: 'drop',
