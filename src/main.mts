@@ -101,7 +101,7 @@ const echoCommandSub = nats.subscribe(`command.execute.${echoCommandUUID}`, (sub
       type: 'message.outgoing',
     };
 
-    const outgoingTopic = `chat.message.outgoing.${data.platform}.${data.instance}`;
+    const outgoingTopic = `chat.message.outgoing.${data.platform}.${data.instance}.${data.channel}`;
     void nats.publish(outgoingTopic, JSON.stringify(response));
   } catch (error) {
     log.error(`Failed to parse message: ${message.string()}`, {
