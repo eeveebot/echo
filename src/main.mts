@@ -6,6 +6,7 @@
 import { NatsClient, log } from '@eeveebot/libeevee';
 
 const echoCommandUUID = '9e5c1e0c-c6ad-4ae1-a368-7a28cd539dc9';
+const echoCommandDisplayName = 'echo';
 
 const natsClients: InstanceType<typeof NatsClient>[] = [];
 const natsSubscriptions: Array<Promise<string | boolean>> = [];
@@ -52,6 +53,7 @@ async function registerEchoCommand(): Promise<void> {
   const commandRegistration = {
     type: 'command.register',
     commandUUID: echoCommandUUID,
+    commandDisplayName: echoCommandDisplayName,
     platform: '.*', // Match all platforms
     network: '.*', // Match all networks
     instance: '.*', // Match all instances
@@ -122,9 +124,9 @@ natsSubscriptions.push(echoCommandSub);
 
 // Subscribe to control messages for re-registering commands
 const controlSubRegisterCommandEcho = nats.subscribe(
-  'control.registercommands.echo',
+  `control.registerCommands.${echoCommandDisplayName}`,
   () => {
-    log.info('Received control.registercommands.echo control message', {
+    log.info(`Received control.registerCommands.${echoCommandDisplayName} control message`, {
       producer: 'echo',
     });
     void registerEchoCommand();
@@ -133,9 +135,9 @@ const controlSubRegisterCommandEcho = nats.subscribe(
 natsSubscriptions.push(controlSubRegisterCommandEcho);
 
 const controlSubRegisterCommandAll = nats.subscribe(
-  'control.registercommands',
+  'control.registerCommands',
   () => {
-    log.info('Received control.registercommands control message', {
+    log.info('Received control.registerCommands control message', {
       producer: 'echo',
     });
     void registerEchoCommand();
