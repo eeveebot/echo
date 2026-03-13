@@ -86,7 +86,7 @@ const echoCommandSub = nats.subscribe(`command.execute.${echoCommandUUID}`, (sub
   try {
     const data = JSON.parse(message.string());
     log.info(
-      `Platform: ${data.platform}, Connection: ${data.instance}, Channel: ${data.channel}, User: ${data.user}, Message: ${data.text}`,
+      `Platform: ${data.platform}, Connection: ${data.instance}, Channel: ${data.channel}, User: ${data.user}, Message: ${data.originalText}`,
       { producer: 'echo' }
     );
 
