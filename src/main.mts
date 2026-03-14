@@ -7,6 +7,9 @@ import fs from 'node:fs';
 import yaml from 'js-yaml';
 import { NatsClient, log } from '@eeveebot/libeevee';
 
+// Record module startup time for uptime tracking
+const moduleStartTime = Date.now();
+
 const echoCommandUUID = '9e5c1e0c-c6ad-4ae1-a368-7a28cd539dc9';
 const echoCommandDisplayName = 'echo';
 
@@ -211,3 +214,34 @@ const controlSubRegisterCommandAll = nats.subscribe(
   }
 );
 natsSubscriptions.push(controlSubRegisterCommandAll);
+
+// Subscribe to stats.uptime messages and respond with module uptime
+const statsUptimeSub = nats.subscribe('stats.uptime', (subject, message) => {
+  try {
+    const data = JSON.parse(message.string());
+    log.info('Received stats.uptime request', {
+      producer: 'echo',
+      replyChannel: data.replyChannel,
+    });
+
+    // Calculate uptime in milliseconds
+    const uptime = Date.now() - moduleStartTime;
+
+    // Send uptime back via the ephemeral reply channel
+    const uptimeResponse = {
+      module: 'echo',
+      uptime: uptime,
+      uptimeFormatted: `${Math.floor(uptime / 86400000)}d ${Math.floor((uptime % 86400000) / 3600000)}h ${Math.floor((uptime % 3600000) / 60000)}m ${Math.floor((uptime % 60000) / 1000)}s`,
+    };
+
+    if (data.replyChannel) {
+      void nats.publish(data.replyChannel, JSON.stringify(uptimeResponse));
+    }
+  } catch (error) {
+    log.error('Failed to process stats.uptime request', {
+      producer: 'echo',
+      error: error,
+    });
+  }
+});
+natsSubscriptions.push(statsUptimeSub);
