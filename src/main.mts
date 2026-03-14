@@ -245,3 +245,50 @@ const statsUptimeSub = nats.subscribe('stats.uptime', (subject, message) => {
   }
 });
 natsSubscriptions.push(statsUptimeSub);
+
+// Help information for echo commands
+const echoHelp = [
+  {
+    command: 'echo',
+    descr: 'Echoes back the text you provide',
+    params: [
+      {
+        param: 'text',
+        required: true,
+        descr: 'The text to echo back',
+      },
+    ],
+  },
+];
+
+// Function to publish help information
+async function publishHelp(): Promise<void> {
+  const helpUpdate = {
+    from: 'echo',
+    help: echoHelp,
+  };
+
+  try {
+    await nats.publish('help.update', JSON.stringify(helpUpdate));
+    log.info('Published echo help information', {
+      producer: 'echo',
+    });
+  } catch (error) {
+    log.error('Failed to publish echo help information', {
+      producer: 'echo',
+      error: error,
+    });
+  }
+}
+
+// Publish help information at startup
+await publishHelp();
+
+// Subscribe to help update requests
+const helpUpdateRequestSub = nats.subscribe('help.updateRequest', () => {
+  log.info('Received help.updateRequest message', {
+    producer: 'echo',
+  });
+  void publishHelp();
+});
+natsSubscriptions.push(helpUpdateRequestSub);
