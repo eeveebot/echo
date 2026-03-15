@@ -10,6 +10,19 @@ import { NatsClient, log } from '@eeveebot/libeevee';
 // Record module startup time for uptime tracking
 const moduleStartTime = Date.now();
 
+// Import metrics
+import { initializeSystemMetrics, setupHttpServer } from '@eeveebot/libeevee';
+import { recordEchoCommand, recordProcessingTime } from './lib/metrics.mjs';
+
+// Initialize system metrics
+initializeSystemMetrics('echo');
+
+// Setup HTTP server for metrics and health checks
+setupHttpServer({
+  port: process.env.HTTP_API_PORT || '9002',
+  serviceName: 'echo'
+});
+
 const echoCommandUUID = '9e5c1e0c-c6ad-4ae1-a368-7a28cd539dc9';
 const echoCommandDisplayName = 'echo';
 
@@ -154,6 +167,7 @@ await registerEchoCommand();
 const echoCommandSub = nats.subscribe(
   `command.execute.${echoCommandUUID}`,
   (subject, message) => {
+    const startTime = Date.now();
     try {
       const data = JSON.parse(message.string());
       log.info('Received command.execute for echo', {
@@ -178,12 +192,28 @@ const echoCommandSub = nats.subscribe(
 
       const outgoingTopic = `chat.message.outgoing.${data.platform}.${data.instance}.${data.channel}`;
       void nats.publish(outgoingTopic, JSON.stringify(response));
+      
+      // Record successful command execution
+      recordEchoCommand(data.platform, data.network, data.channel, 'success');
     } catch (error) {
       log.error('Failed to parse message', {
         producer: 'echo',
         message: message.string(),
         error: error,
       });
+      
+      // Record failed command execution
+      if (typeof error === 'object' && error !== null && 'platform' in error && 'network' in error && 'channel' in error) {
+        // If we have the data, record with specific details
+        recordEchoCommand(error.platform, error.network, error.channel, 'error');
+      } else {
+        // Otherwise record with unknown details
+        recordEchoCommand('unknown', 'unknown', 'unknown', 'error');
+      }
+    } finally {
+      // Record processing time
+      const duration = Date.now() - startTime;
+      recordProcessingTime(duration / 1000); // Convert to seconds
     }
   }
 );
