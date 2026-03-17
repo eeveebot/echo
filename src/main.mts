@@ -11,15 +11,21 @@ import { NatsClient, log } from '@eeveebot/libeevee';
 const moduleStartTime = Date.now();
 
 // Import metrics
-import { initializeSystemMetrics, setupHttpServer } from '@eeveebot/libeevee';
-import { recordEchoCommand, recordProcessingTime } from './lib/metrics.mjs';
+import { initializeSystemMetrics, setupHttpServer, register } from '@eeveebot/libeevee';
+import {
+  recordEchoCommand,
+  recordProcessingTime,
+  recordEchoError,
+  recordNatsPublish,
+  recordNatsSubscribe,
+} from './lib/metrics.mjs';
 
 // Initialize system metrics
 initializeSystemMetrics('echo');
 
 // Setup HTTP server for metrics and health checks
 setupHttpServer({
-  port: process.env.HTTP_API_PORT || '9002',
+  port: process.env.HTTP_API_PORT || '9000',
   serviceName: 'echo'
 });
 
@@ -148,6 +154,7 @@ async function registerEchoCommand(): Promise<void> {
 
   try {
     await nats.publish('command.register', JSON.stringify(commandRegistration));
+    recordNatsPublish('command.register', 'command_registration');
     log.info('Registered echo command with router', {
       producer: 'echo',
       ratelimit: rateLimitConfig,
@@ -167,6 +174,7 @@ await registerEchoCommand();
 const echoCommandSub = nats.subscribe(
   `command.execute.${echoCommandUUID}`,
   (subject, message) => {
+    recordNatsSubscribe(subject);
     const startTime = Date.now();
     try {
       const data = JSON.parse(message.string());
@@ -192,6 +200,7 @@ const echoCommandSub = nats.subscribe(
 
       const outgoingTopic = `chat.message.outgoing.${data.platform}.${data.instance}.${data.channel}`;
       void nats.publish(outgoingTopic, JSON.stringify(response));
+      recordNatsPublish(outgoingTopic, 'command_response');
       
       // Record successful command execution
       recordEchoCommand(data.platform, data.network, data.channel, 'success');
@@ -210,6 +219,7 @@ const echoCommandSub = nats.subscribe(
         // Otherwise record with unknown details
         recordEchoCommand('unknown', 'unknown', 'unknown', 'error');
       }
+      recordEchoError('parse_error');
     } finally {
       // Record processing time
       const duration = Date.now() - startTime;
@@ -222,7 +232,8 @@ natsSubscriptions.push(echoCommandSub);
 // Subscribe to control messages for re-registering commands
 const controlSubRegisterCommandEcho = nats.subscribe(
   `control.registerCommands.${echoCommandDisplayName}`,
-  () => {
+  (subject) => {
+    recordNatsSubscribe(subject);
     log.info(
       `Received control.registerCommands.${echoCommandDisplayName} control message`,
       {
@@ -236,7 +247,8 @@ natsSubscriptions.push(controlSubRegisterCommandEcho);
 
 const controlSubRegisterCommandAll = nats.subscribe(
   'control.registerCommands',
-  () => {
+  (subject) => {
+    recordNatsSubscribe(subject);
     log.info('Received control.registerCommands control message', {
       producer: 'echo',
     });
@@ -247,6 +259,7 @@ natsSubscriptions.push(controlSubRegisterCommandAll);
 
 // Subscribe to stats.uptime messages and respond with module uptime
 const statsUptimeSub = nats.subscribe('stats.uptime', (subject, message) => {
+  recordNatsSubscribe(subject);
   try {
     const data = JSON.parse(message.string());
     log.info('Received stats.uptime request', {
@@ -266,6 +279,7 @@ const statsUptimeSub = nats.subscribe('stats.uptime', (subject, message) => {
 
     if (data.replyChannel) {
       void nats.publish(data.replyChannel, JSON.stringify(uptimeResponse));
+      recordNatsPublish(data.replyChannel, 'uptime_response');
     }
   } catch (error) {
     log.error('Failed to process stats.uptime request', {
@@ -275,6 +289,63 @@ const statsUptimeSub = nats.subscribe('stats.uptime', (subject, message) => {
   }
 });
 natsSubscriptions.push(statsUptimeSub);
+
+// Subscribe to stats.emit.request messages and respond with full module stats
+const statsEmitRequestSub = nats.subscribe(
+  'stats.emit.request',
+  (subject, message) => {
+    recordNatsSubscribe(subject);
+    try {
+      const data = JSON.parse(message.string());
+      log.info('Received stats.emit.request', {
+        producer: 'echo',
+        replyChannel: data.replyChannel,
+      });
+
+      // Calculate uptime in milliseconds
+      const uptime = Date.now() - moduleStartTime;
+
+      // Get all prom-client metrics
+      void register
+        .metrics()
+        .then((prometheusMetrics) => {
+          // Get memory usage information
+          const memoryUsage = process.memoryUsage();
+
+          // Send stats back via the ephemeral reply channel
+          const statsResponse = {
+            module: 'echo',
+            stats: {
+              uptime_seconds: Math.floor(uptime / 1000),
+              uptime_formatted: `${Math.floor(uptime / 86400000)}d ${Math.floor((uptime % 86400000) / 3600000)}h ${Math.floor((uptime % 3600000) / 60000)}m ${Math.floor((uptime % 60000) / 1000)}s`,
+              memory_rss_mb: Math.round(memoryUsage.rss / (1024 * 1024)),
+              memory_heap_used_mb: Math.round(
+                memoryUsage.heapUsed / (1024 * 1024)
+              ),
+              prometheus_metrics: prometheusMetrics,
+            },
+          };
+
+          if (data.replyChannel) {
+            void nats.publish(data.replyChannel, JSON.stringify(statsResponse));
+            recordNatsPublish(data.replyChannel, 'stats_response');
+          }
+        })
+        .catch((error) => {
+          log.error('Failed to collect prometheus metrics', {
+            producer: 'echo',
+            error: error,
+          });
+        });
+    } catch (error) {
+      log.error('Failed to process stats.emit.request', {
+        producer: 'echo',
+        error: error,
+      });
+    }
+  }
+);
+natsSubscriptions.push(statsEmitRequestSub);
 
 // Help information for echo commands
 const echoHelp = [
@@ -300,6 +371,7 @@ async function publishHelp(): Promise<void> {
 
   try {
     await nats.publish('help.update', JSON.stringify(helpUpdate));
+    recordNatsPublish('help.update', 'help_update');
     log.info('Published echo help information', {
       producer: 'echo',
     });
@@ -315,7 +387,8 @@ async function publishHelp(): Promise<void> {
 await publishHelp();
 
 // Subscribe to help update requests
-const helpUpdateRequestSub = nats.subscribe('help.updateRequest', () => {
+const helpUpdateRequestSub = nats.subscribe('help.updateRequest', (subject) => {
+  recordNatsSubscribe(subject);
   log.info('Received help.updateRequest message', {
     producer: 'echo',
   });

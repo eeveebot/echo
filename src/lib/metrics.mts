@@ -1,4 +1,11 @@
-import { Counter, Histogram, log } from '@eeveebot/libeevee';
+import {
+  Counter,
+  Histogram,
+  log,
+  natsPublishCounter,
+  natsSubscribeCounter,
+  commandErrorCounter,
+} from '@eeveebot/libeevee';
 
 // Echo module specific metrics
 export const echoCommandCounter = new Counter({
@@ -38,6 +45,51 @@ export function recordProcessingTime(duration: number): void {
     echoProcessingTime.observe({ module: 'echo' }, duration);
   } catch (error) {
     log.error('Failed to record echo processing time metric', {
+      producer: 'echo-metrics',
+      error,
+    });
+  }
+}
+
+// Function to record errors
+export function recordEchoError(errorType: string): void {
+  try {
+    commandErrorCounter.inc({
+      module: 'echo',
+      type: errorType,
+    });
+  } catch (error) {
+    log.error('Failed to record echo error metric', {
+      producer: 'echo-metrics',
+      error,
+    });
+  }
+}
+
+// Function to record NATS publish operations
+export function recordNatsPublish(subject: string, messageType: string): void {
+  try {
+    natsPublishCounter.inc({
+      module: 'echo',
+      type: messageType,
+    });
+  } catch (error) {
+    log.error('Failed to record NATS publish metric', {
+      producer: 'echo-metrics',
+      error,
+    });
+  }
+}
+
+// Function to record NATS subscribe operations
+export function recordNatsSubscribe(subject: string): void {
+  try {
+    natsSubscribeCounter.inc({
+      module: 'echo',
+      subject: subject,
+    });
+  } catch (error) {
+    log.error('Failed to record NATS subscribe metric', {
       producer: 'echo-metrics',
       error,
     });
