@@ -3,22 +3,29 @@
 // Echo module
 // listens for messages, echos them back
 
-import fs from 'node:fs';
-import yaml from 'js-yaml';
-import { NatsClient, log } from '@eeveebot/libeevee';
+import {
+  NatsClient,
+  log,
+  createNatsConnection,
+  registerGracefulShutdown,
+  createModuleMetrics,
+  loadModuleConfig,
+  RateLimitConfig,
+  defaultRateLimit,
+  initializeSystemMetrics,
+  setupHttpServer,
+  registerCommand,
+  sendChatMessage,
+  registerHelp,
+  HelpEntry,
+  registerStatsHandlers,
+} from '@eeveebot/libeevee';
 
 // Record module startup time for uptime tracking
 const moduleStartTime = Date.now();
 
-// Import metrics
-import { initializeSystemMetrics, setupHttpServer, register } from '@eeveebot/libeevee';
-import {
-  recordEchoCommand,
-  recordProcessingTime,
-  recordEchoError,
-  recordNatsPublish,
-  recordNatsSubscribe,
-} from './lib/metrics.mjs';
+// Initialize module-scoped metrics recorder
+const metrics = createModuleMetrics('echo');
 
 // Initialize system metrics
 initializeSystemMetrics('echo');
@@ -26,19 +33,11 @@ initializeSystemMetrics('echo');
 // Setup HTTP server for metrics and health checks
 setupHttpServer({
   port: process.env.HTTP_API_PORT || '9000',
-  serviceName: 'echo'
+  serviceName: 'echo',
 });
 
 const echoCommandUUID = '9e5c1e0c-c6ad-4ae1-a368-7a28cd539dc9';
 const echoCommandDisplayName = 'echo';
-
-// Rate limit configuration interface
-interface RateLimitConfig {
-  mode: 'enqueue' | 'drop';
-  level: 'channel' | 'user' | 'global';
-  limit: number;
-  interval: string; // e.g., "30s", "1m", "5m"
-}
 
 // Echo module configuration interface
 interface EchoConfig {
@@ -48,133 +47,30 @@ interface EchoConfig {
 const natsClients: InstanceType<typeof NatsClient>[] = [];
 const natsSubscriptions: Array<Promise<string | boolean>> = [];
 
-/**
- * Load echo configuration from YAML file
- * @returns EchoConfig parsed from YAML file
- */
-function loadEchoConfig(): EchoConfig {
-  // Get the config file path from environment variable
-  const configPath = process.env.MODULE_CONFIG_PATH;
-  if (!configPath) {
-    log.warn('MODULE_CONFIG_PATH not set, using default rate limit config', {
-      producer: 'echo',
-    });
-    return {};
-  }
-
-  try {
-    // Read the YAML file
-    const configFile = fs.readFileSync(configPath, 'utf8');
-
-    // Parse the YAML content
-    const config = yaml.load(configFile) as EchoConfig;
-
-    log.info('Loaded echo configuration', {
-      producer: 'echo',
-      configPath,
-    });
-
-    return config;
-  } catch (error) {
-    log.error('Failed to load echo configuration, using defaults', {
-      producer: 'echo',
-      configPath,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return {};
-  }
-}
-
-//
-// Do whatever teardown is necessary before calling common handler
-process.on('SIGINT', () => {
-  natsClients.forEach((natsClient) => {
-    void natsClient.drain();
-  });
-});
-
-process.on('SIGTERM', () => {
-  natsClients.forEach((natsClient) => {
-    void natsClient.drain();
-  });
-});
-
-//
-// Setup NATS connection
-
-// Get host and token
-const natsHost = process.env.NATS_HOST || false;
-if (!natsHost) {
-  const msg = 'environment variable NATS_HOST is not set.';
-  throw new Error(msg);
-}
-
-const natsToken = process.env.NATS_TOKEN || false;
-if (!natsToken) {
-  const msg = 'environment variable NATS_TOKEN is not set.';
-  throw new Error(msg);
-}
-
-const nats = new NatsClient({
-  natsHost: natsHost as string,
-  natsToken: natsToken as string,
-});
-natsClients.push(nats);
-await nats.connect();
-
 // Load configuration at startup
-const echoConfig = loadEchoConfig();
+const echoConfig = loadModuleConfig<EchoConfig>({});
 
-// Function to register the echo command with the router
-async function registerEchoCommand(): Promise<void> {
-  // Default rate limit configuration
-  const defaultRateLimit = {
-    mode: 'drop',
-    level: 'user',
-    limit: 5,
-    interval: '1m',
-  };
+// Register graceful shutdown handlers
+registerGracefulShutdown(natsClients);
 
-  // Use configured rate limit or default
-  const rateLimitConfig = echoConfig.ratelimit || defaultRateLimit;
+// Setup NATS connection
+const nats = await createNatsConnection();
+natsClients.push(nats);
 
-  const commandRegistration = {
-    type: 'command.register',
-    commandUUID: echoCommandUUID,
-    commandDisplayName: echoCommandDisplayName,
-    platform: '.*', // Match all platforms
-    network: '.*', // Match all networks
-    instance: '.*', // Match all instances
-    channel: '.*', // Match all channels
-    user: '.*', // Match all users
-      regex: '^echo\\s+', // Match echo followed by whitespace
-    platformPrefixAllowed: true,
-    ratelimit: rateLimitConfig,
-  };
-
-  try {
-    await nats.publish('command.register', JSON.stringify(commandRegistration));
-    recordNatsPublish('command.register', 'command_registration');
-    log.info('Registered echo command with router', {
-      producer: 'echo',
-      ratelimit: rateLimitConfig,
-    });
-  } catch (error) {
-    log.error('Failed to register echo command', {
-      producer: 'echo',
-      error: error,
-    });
-  }
-}
-
-// Register commands at startup
-await registerEchoCommand();
+// Register the echo command with the router (auto-subscribes to control.registerCommands)
+const commandSubs = await registerCommand(nats, {
+  commandUUID: echoCommandUUID,
+  commandDisplayName: echoCommandDisplayName,
+  regex: '^echo\\s+',
+  ratelimit: echoConfig.ratelimit || defaultRateLimit,
+}, metrics);
+natsSubscriptions.push(...commandSubs);
 
 // Subscribe to command execution messages
 const echoCommandSub = nats.subscribe(
   `command.execute.${echoCommandUUID}`,
   (subject, message) => {
-    recordNatsSubscribe(subject);
+    metrics.recordNatsSubscribe(subject);
     const startTime = Date.now();
     try {
       const data = JSON.parse(message.string());
@@ -187,168 +83,40 @@ const echoCommandSub = nats.subscribe(
         originalText: data.originalText,
       });
 
-      // Echo back on chat.message.outgoing.$PLATFORM.$INSTANCE.$CHANNEL
-      const response = {
+      // Echo back
+      void sendChatMessage(nats, {
         channel: data.channel,
         network: data.network,
         instance: data.instance,
         platform: data.platform,
         text: data.text,
         trace: data.trace,
-        type: 'message.outgoing',
-      };
+      }, metrics);
 
-      const outgoingTopic = `chat.message.outgoing.${data.platform}.${data.instance}.${data.channel}`;
-      void nats.publish(outgoingTopic, JSON.stringify(response));
-      recordNatsPublish(outgoingTopic, 'command_response');
-      
-      // Record successful command execution
-      recordEchoCommand(data.platform, data.network, data.channel, 'success');
+      metrics.recordCommand(data.platform, data.network, data.channel, 'success');
     } catch (error) {
       log.error('Failed to parse message', {
         producer: 'echo',
         message: message.string(),
         error: error,
       });
-      
-      // Record failed command execution
-      if (typeof error === 'object' && error !== null && 'platform' in error && 'network' in error && 'channel' in error) {
-        // If we have the data, record with specific details
-        recordEchoCommand(error.platform, error.network, error.channel, 'error');
-      } else {
-        // Otherwise record with unknown details
-        recordEchoCommand('unknown', 'unknown', 'unknown', 'error');
-      }
-      recordEchoError('parse_error');
+
+      metrics.recordCommand('unknown', 'unknown', 'unknown', 'error');
+      metrics.recordError('parse_error');
     } finally {
-      // Record processing time
       const duration = Date.now() - startTime;
-      recordProcessingTime(duration / 1000); // Convert to seconds
+      metrics.recordProcessingTime(duration / 1000);
     }
   }
 );
 natsSubscriptions.push(echoCommandSub);
 
-// Subscribe to control messages for re-registering commands
-const controlSubRegisterCommandEcho = nats.subscribe(
-  `control.registerCommands.${echoCommandDisplayName}`,
-  (subject) => {
-    recordNatsSubscribe(subject);
-    log.info(
-      `Received control.registerCommands.${echoCommandDisplayName} control message`,
-      {
-        producer: 'echo',
-      }
-    );
-    void registerEchoCommand();
-  }
-);
-natsSubscriptions.push(controlSubRegisterCommandEcho);
+// Subscribe to stats.uptime and stats.emit.request
+const statsSubs = registerStatsHandlers({ nats, moduleName: 'echo', startTime: moduleStartTime, metrics });
+natsSubscriptions.push(...statsSubs);
 
-const controlSubRegisterCommandAll = nats.subscribe(
-  'control.registerCommands',
-  (subject) => {
-    recordNatsSubscribe(subject);
-    log.info('Received control.registerCommands control message', {
-      producer: 'echo',
-    });
-    void registerEchoCommand();
-  }
-);
-natsSubscriptions.push(controlSubRegisterCommandAll);
-
-// Subscribe to stats.uptime messages and respond with module uptime
-const statsUptimeSub = nats.subscribe('stats.uptime', (subject, message) => {
-  recordNatsSubscribe(subject);
-  try {
-    const data = JSON.parse(message.string());
-    log.info('Received stats.uptime request', {
-      producer: 'echo',
-      replyChannel: data.replyChannel,
-    });
-
-    // Calculate uptime in milliseconds
-    const uptime = Date.now() - moduleStartTime;
-
-    // Send uptime back via the ephemeral reply channel
-    const uptimeResponse = {
-      module: 'echo',
-      uptime: uptime,
-      uptimeFormatted: `${Math.floor(uptime / 86400000)}d ${Math.floor((uptime % 86400000) / 3600000)}h ${Math.floor((uptime % 3600000) / 60000)}m ${Math.floor((uptime % 60000) / 1000)}s`,
-    };
-
-    if (data.replyChannel) {
-      void nats.publish(data.replyChannel, JSON.stringify(uptimeResponse));
-      recordNatsPublish(data.replyChannel, 'uptime_response');
-    }
-  } catch (error) {
-    log.error('Failed to process stats.uptime request', {
-      producer: 'echo',
-      error: error,
-    });
-  }
-});
-natsSubscriptions.push(statsUptimeSub);
-
-// Subscribe to stats.emit.request messages and respond with full module stats
-const statsEmitRequestSub = nats.subscribe(
-  'stats.emit.request',
-  (subject, message) => {
-    recordNatsSubscribe(subject);
-    try {
-      const data = JSON.parse(message.string());
-      log.info('Received stats.emit.request', {
-        producer: 'echo',
-        replyChannel: data.replyChannel,
-      });
-
-      // Calculate uptime in milliseconds
-      const uptime = Date.now() - moduleStartTime;
-
-      // Get all prom-client metrics
-      void register
-        .metrics()
-        .then((prometheusMetrics) => {
-          // Get memory usage information
-          const memoryUsage = process.memoryUsage();
-
-          // Send stats back via the ephemeral reply channel
-          const statsResponse = {
-            module: 'echo',
-            stats: {
-              uptime_seconds: Math.floor(uptime / 1000),
-              uptime_formatted: `${Math.floor(uptime / 86400000)}d ${Math.floor((uptime % 86400000) / 3600000)}h ${Math.floor((uptime % 3600000) / 60000)}m ${Math.floor((uptime % 60000) / 1000)}s`,
-              memory_rss_mb: Math.round(memoryUsage.rss / (1024 * 1024)),
-              memory_heap_used_mb: Math.round(
-                memoryUsage.heapUsed / (1024 * 1024)
-              ),
-              prometheus_metrics: prometheusMetrics,
-            },
-          };
-
-          if (data.replyChannel) {
-            void nats.publish(data.replyChannel, JSON.stringify(statsResponse));
-            recordNatsPublish(data.replyChannel, 'stats_response');
-          }
-        })
-        .catch((error) => {
-          log.error('Failed to collect prometheus metrics', {
-            producer: 'echo',
-            error: error,
-          });
-        });
-    } catch (error) {
-      log.error('Failed to process stats.emit.request', {
-        producer: 'echo',
-        error: error,
-      });
-    }
-  }
-);
-natsSubscriptions.push(statsEmitRequestSub);
-
-// Help information for echo commands
-const echoHelp = [
+// Register help information (publishes immediately + subscribes to update requests)
+const echoHelp: HelpEntry[] = [
   {
     command: 'echo',
     descr: 'Echoes back the text you provide',
@@ -362,36 +130,5 @@ const echoHelp = [
   },
 ];
 
-// Function to publish help information
-async function publishHelp(): Promise<void> {
-  const helpUpdate = {
-    from: 'echo',
-    help: echoHelp,
-  };
-
-  try {
-    await nats.publish('help.update', JSON.stringify(helpUpdate));
-    recordNatsPublish('help.update', 'help_update');
-    log.info('Published echo help information', {
-      producer: 'echo',
-    });
-  } catch (error) {
-    log.error('Failed to publish echo help information', {
-      producer: 'echo',
-      error: error,
-    });
-  }
-}
-
-// Publish help information at startup
-await publishHelp();
-
-// Subscribe to help update requests
-const helpUpdateRequestSub = nats.subscribe('help.updateRequest', (subject) => {
-  recordNatsSubscribe(subject);
-  log.info('Received help.updateRequest message', {
-    producer: 'echo',
-  });
-  void publishHelp();
-});
-natsSubscriptions.push(helpUpdateRequestSub);
+const helpSubs = await registerHelp(nats, 'echo', echoHelp, metrics);
+natsSubscriptions.push(...helpSubs);
