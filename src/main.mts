@@ -34,6 +34,7 @@ initializeSystemMetrics('echo');
 setupHttpServer({
   port: process.env.HTTP_API_PORT || '9000',
   serviceName: 'echo',
+  natsClients: natsClients,
 });
 
 const echoCommandUUID = '9e5c1e0c-c6ad-4ae1-a368-7a28cd539dc9';
