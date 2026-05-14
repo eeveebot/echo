@@ -19,6 +19,7 @@ import {
   registerHelp,
   HelpEntry,
   registerStatsHandlers,
+  NatsSubscriptionResult,
 } from '@eeveebot/libeevee';
 
 // Record module startup time for uptime tracking
@@ -48,7 +49,7 @@ setupHttpServer({
   serviceName: 'echo',
   natsClients: natsClients,
 });
-const natsSubscriptions: Array<Promise<string | boolean>> = [];
+const natsSubscriptions: Array<Promise<NatsSubscriptionResult>> = [];
 
 // Load configuration at startup
 const echoConfig = loadModuleConfig<EchoConfig>({});
