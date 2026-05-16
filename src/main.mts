@@ -3,6 +3,8 @@
 // Echo module
 // listens for messages, echos them back
 
+import fs from 'node:fs';
+
 import {
   NatsClient,
   log,
@@ -24,6 +26,7 @@ import {
 
 // Record module startup time for uptime tracking
 const moduleStartTime = Date.now();
+const moduleVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version as string;
 
 // Initialize module-scoped metrics recorder
 const metrics = createModuleMetrics('echo');
@@ -116,7 +119,7 @@ const echoCommandSub = nats.subscribe(
 natsSubscriptions.push(echoCommandSub);
 
 // Subscribe to stats.uptime and stats.emit.request
-const statsSubs = registerStatsHandlers({ nats, moduleName: 'echo', startTime: moduleStartTime, metrics });
+const statsSubs = registerStatsHandlers({ nats, moduleName: 'echo', startTime: moduleStartTime, version: moduleVersion, metrics });
 natsSubscriptions.push(...statsSubs);
 
 // Register help information (publishes immediately + subscribes to update requests)
